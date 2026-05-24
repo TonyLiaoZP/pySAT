@@ -1,7 +1,9 @@
+import argparse
 import pdb
 import time
 import multiprocessing as mp
 from dataclasses import dataclass, field
+from pathlib import Path
 from cnf import CNF, Clause
 from logic import Formula
 from itertools import combinations, product
@@ -10,6 +12,9 @@ from cdcl import CDCL
 from utils import set_random_seed
 
 SOLVER_TIME_LIMIT = 60.0
+TESTS_DIR = Path(__file__).parent / "tests"
+
+
 @dataclass
 class Sudoku:
     clues: dict[tuple[int, int], int] = field(default_factory=dict)
@@ -81,6 +86,35 @@ class Sudoku:
                 cnf.add_clause(Clause(literals=[~(variables[(i, j, k1)]), ~(variables[(i, j, k2)])]))
 
         return cnf
+
+
+def load_sudoku(path: Path | str) -> Sudoku:
+    lines: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        row = line.replace(" ", "").replace("|", "")
+        lines.append(row)
+
+    if not lines:
+        raise ValueError(f"No puzzle grid found in {path}")
+
+    size = len(lines)
+    if any(len(row) != size for row in lines):
+        raise ValueError(f"Puzzle in {path} must be a square grid")
+
+    clues: dict[tuple[int, int], int] = {}
+    for row, line in enumerate(lines, start=1):
+        for col, ch in enumerate(line, start=1):
+            if ch in ".0":
+                continue
+            if not ch.isdigit():
+                raise ValueError(f"Invalid cell '{ch}' in {path}")
+            clues[(row, col)] = int(ch)
+
+    return Sudoku(clues=clues, size=size)
+
 
 def from_cnf_solution(solution: dict[str, bool], size: int = 9) -> dict[tuple[int, int], int]:
     clues = {}
@@ -173,19 +207,56 @@ def test_cdcl(sudoku: Sudoku, time_limit: float = SOLVER_TIME_LIMIT, seed: int |
     else:
         print("No solution found")
 
-if __name__ == "__main__":
-    seed = set_random_seed(123)
+
+def resolve_test_paths(names: list[str]) -> list[Path]:
+    if not names:
+        return sorted(TESTS_DIR.glob("*.txt"))
+
+    paths: list[Path] = []
+    for name in names:
+        path = Path(name)
+        if path.is_file():
+            paths.append(path)
+            continue
+        stem = name.removesuffix(".txt")
+        candidate = TESTS_DIR / f"{stem}.txt"
+        if candidate.is_file():
+            paths.append(candidate)
+            continue
+        raise SystemExit(f"Test not found: {name} (looked in {TESTS_DIR})")
+    return paths
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Solve sudoku puzzles with DPLL and CDCL")
+    parser.add_argument(
+        "tests",
+        nargs="*",
+        help="test name(s) such as hard1, or path(s); default: all tests in tests/",
+    )
+    parser.add_argument("--seed", type=float, default=123, help="random seed for solvers")
+    parser.add_argument(
+        "--time-limit",
+        type=float,
+        default=SOLVER_TIME_LIMIT,
+        help="solver time limit in seconds",
+    )
+    args = parser.parse_args()
+
+    seed = set_random_seed(args.seed)
     print(f"Random seed: {seed}")
-    sudoku = Sudoku(clues={
-        (1, 8): 1,
-        (2, 1): 4,
-        (3, 2): 2,
-        (4, 5): 5, (4, 7): 4,# (4, 9): 7,
-        (5, 3): 8, (5, 7): 3,
-        (6, 3): 1, (6, 5): 9,
-        (7, 1): 3, (7, 4): 4,# (7, 7): 2,
-        (8, 2): 5, (8, 4): 1,
-        (9, 4): 8, (9, 6): 6
-    })
-    test_dpll(sudoku, seed=seed)
-    test_cdcl(sudoku, seed=seed)
+
+    test_files = resolve_test_paths(args.tests)
+    if not test_files:
+        raise SystemExit(f"No test files found in {TESTS_DIR}")
+
+    for path in test_files:
+        print(f"\n=== {path.name} ===")
+        sudoku = load_sudoku(path)
+        sudoku.pretty_print()
+        test_dpll(sudoku, time_limit=args.time_limit, seed=seed)
+        test_cdcl(sudoku, time_limit=args.time_limit, seed=seed)
+
+
+if __name__ == "__main__":
+    main()
